@@ -1,0 +1,12 @@
+{
+    "devices": {
+        "deploy": [
+            "SmartHue-12345a",
+            "SmartHue-12345b",
+            "SmartHue-12345c"
+        ],
+        "test": [
+            "SmartHue-12345d"
+        ]
+    }
+}

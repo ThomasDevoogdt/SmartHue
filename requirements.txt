@@ -1,0 +1,5 @@
+pip
+requests
+pytest
+logger
+gitpython
