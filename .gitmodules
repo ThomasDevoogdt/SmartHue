@@ -1,0 +1,3 @@
+[submodule "smartHuePy/version/gitversion"]
+	path = smartHuePy/version/gitversion
+	url = https://github.com/smessmer/gitversion.git
