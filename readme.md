@@ -4,6 +4,12 @@ Since a while, I wanted to create my own smart light. It's not a new concept, ma
 
 I know, this is kind of free advertisement, but if you really want to know on what board I was developing: https://www.electrodragon.com/product/wifi-iot-relay-board-based-esp8266/
 
+
+Clone this repo:
+```
+git clone --recurse-submodules https://github.com/ThomasDevoogdt/SmartHue.git
+```
+
 ## 1. Deploy
 
 ##### Install PlatformIO Core (CLI)
