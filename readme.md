@@ -61,7 +61,7 @@ pip install -r requirements.txt
 
 ##### Run the deploy script:
 ```bash
-python smartHuePy/deployer/deployer.py -d devices.json
+python deployer.py -d devices.json
 ```
 
 ## 2. Usage
