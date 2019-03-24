@@ -52,7 +52,7 @@ void Logger::pushLogToNodes(String& msg, const Severity& severity)
     for (int i = 0; i < m_loggerNodeList.size(); i++) {
         LoggerNode loggerNode = m_loggerNodeList.get(i);
         if (loggerNode.severity < severity) {
-            break;
+            continue;
         }
 
         loggerNode.logger(msg);
