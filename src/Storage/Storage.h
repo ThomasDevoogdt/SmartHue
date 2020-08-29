@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <FS.h>
+#include "LittleFS.h"
 
 class Storage {
 
@@ -11,12 +11,12 @@ public:
     Storage()
     {
         m_storagePath = "";
-        SPIFFS.begin();
+        LittleFS.begin();
     };
     Storage(String path)
     {
         m_storagePath = path;
-        SPIFFS.begin();
+        LittleFS.begin();
     }
 
     bool remove()
@@ -24,7 +24,7 @@ public:
         if (m_storagePath == "") {
             return false;
         } else {
-            return SPIFFS.remove(m_storagePath);
+            return LittleFS.remove(m_storagePath);
         }
     }
 
@@ -41,11 +41,11 @@ public:
     template <class JsonBuffer>
     static JsonObject& loadJson(JsonBuffer& jsonBuffer, String path)
     {
-        if (!SPIFFS.exists(path)) {
+        if (!LittleFS.exists(path)) {
             return jsonBuffer.createObject();
         }
 
-        File file = SPIFFS.open(path, "r");
+        File file = LittleFS.open(path, "r");
         if (!file) {
             Serial.println("file open failed");
             return jsonBuffer.createObject();
@@ -76,9 +76,9 @@ public:
             return false;
         }
 
-        SPIFFS.remove(path); // delete existing file, otherwise the configuration is appended to the file
+        LittleFS.remove(path); // delete existing file, otherwise the configuration is appended to the file
 
-        File file = SPIFFS.open(path, "w");
+        File file = LittleFS.open(path, "w");
         if (!file) {
             Serial.println("file open failed");
             return false;
