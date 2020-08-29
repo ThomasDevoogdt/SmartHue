@@ -16,7 +16,7 @@
 #include <secure/ssl.h>
 
 bool setupOTA();
-bool setupWiFi(int timeoutConfigAp = 1000 * 600, int timeoutConnection = 1000 * 30);
+bool setupWiFi(int timeoutConfigAp = 1000 * 600, int timeoutConnection = 1000 * 120);
 bool reconnectWiFi(bool begin = false, bool force = false);
 
 void setupDnsServer();
