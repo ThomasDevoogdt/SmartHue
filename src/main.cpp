@@ -235,7 +235,7 @@ void setupWebServer()
 {
     logger.log("[Setup Webserver]");
     server.reset(new BearSSL::ESP8266WebServerSecure(443));
-    server->setRSACert(new BearSSLX509List(ssl::serverCert), new BearSSLPrivateKey(ssl::serverKey));
+    server->getServer().setRSACert(new BearSSL::X509List(ssl::serverCert), new BearSSL::PrivateKey(ssl::serverKey));
 
     server->on("/api/version", HTTP_GET, []() {
         logger.log("[Webserver] serve /api/version");
