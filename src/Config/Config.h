@@ -17,7 +17,7 @@ public:
 
     void reset()
     {
-        SPIFFS.remove(CONFIG_PATH);
+        LittleFS.remove(CONFIG_PATH);
         setup();
     }
 
@@ -104,7 +104,7 @@ public:
 private:
     bool setup()
     {
-        if (!SPIFFS.begin()) {
+        if (!LittleFS.begin()) {
             return false;
         }
 
