@@ -8,23 +8,24 @@
 class Storage {
 
 public:
-    Storage()
+    Storage(String path = "", Print *logger = &Serial) :
+        m_storagePath(path),
+        p_logger(logger),
+        p_fs(&LittleFS)
     {
-        m_storagePath = "";
-        LittleFS.begin();
-    };
-    Storage(String path)
-    {
-        m_storagePath = path;
-        LittleFS.begin();
+        begin();
     }
 
-    bool remove()
+    void setLogger(Print *logger) {
+        p_logger = logger;
+    }
+
+    bool reset()
     {
         if (m_storagePath == "") {
             return false;
         } else {
-            return LittleFS.remove(m_storagePath);
+            return p_fs->remove(m_storagePath);
         }
     }
 
@@ -34,20 +35,20 @@ public:
         if (m_storagePath == "") {
             return jsonBuffer.createObject();
         } else {
-            return Storage::loadJson(jsonBuffer, m_storagePath);
+            return Storage::loadJson(jsonBuffer, m_storagePath, p_logger, p_fs);
         }
     }
 
     template <class JsonBuffer>
-    static JsonObject& loadJson(JsonBuffer& jsonBuffer, String path)
+    static JsonObject& loadJson(JsonBuffer& jsonBuffer, String path, Print *logger = &Serial, FS *fs = &LittleFS)
     {
-        if (!LittleFS.exists(path)) {
+        if (!fs->exists(path)) {
             return jsonBuffer.createObject();
         }
 
-        File file = LittleFS.open(path, "r");
+        File file = fs->open(path, "r");
         if (!file) {
-            Serial.println("file open failed");
+            logger->println("[Storage] file open failed");
             return jsonBuffer.createObject();
         }
 
@@ -66,21 +67,19 @@ public:
         if (m_storagePath == "") {
             return false;
         } else {
-            return Storage::writeJson(jsonObject, m_storagePath);
+            return Storage::writeJson(jsonObject, m_storagePath, p_logger, p_fs);
         }
     }
 
-    static bool writeJson(JsonObject& jsonObject, String path)
+    static bool writeJson(JsonObject& jsonObject, String path, Print *logger = &Serial, FS *fs = &LittleFS)
     {
         if (!jsonObject.success()) {
             return false;
         }
 
-        LittleFS.remove(path); // delete existing file, otherwise the configuration is appended to the file
-
-        File file = LittleFS.open(path, "w");
+        File file = fs->open(path, "w");
         if (!file) {
-            Serial.println("file open failed");
+            logger->println("[Storage] file open failed");
             return false;
         }
 
@@ -94,7 +93,13 @@ public:
     }
 
 private:
+    void begin() {
+        p_fs->begin();
+    }
+
     String m_storagePath;
+    Print *p_logger;
+    FS *p_fs;
 };
 
 #endif

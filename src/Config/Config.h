@@ -5,19 +5,19 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-#define CONFIG_PATH "config/system.json"
+#define CONFIG_PATH "/config/system.json"
 
 class Config {
 public:
-    Config()
-        : m_storage(Storage(CONFIG_PATH))
+    Config(Print *logger = &Serial)
+        : m_storage(Storage(CONFIG_PATH, logger))
     {
         setup();
     }
 
     void reset()
     {
-        LittleFS.remove(CONFIG_PATH);
+        m_storage.reset();
         setup();
     }
 
@@ -104,10 +104,6 @@ public:
 private:
     bool setup()
     {
-        if (!LittleFS.begin()) {
-            return false;
-        }
-
         bool newConfig = false;
         DynamicJsonBuffer jsonBuffer;
         JsonObject& jsonObjectRoot = m_storage.loadJson(jsonBuffer);

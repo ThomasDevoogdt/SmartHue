@@ -1,11 +1,16 @@
+import os
+import sys
 import json
 import logging
 import pytest
 
+repo_name = "SmartHue"
+sys.path.append("{}{}/".format(os.path.abspath(__file__).split(repo_name)[0], repo_name))
 from smartHuePy.helpers.helpers import *
 
 logging.basicConfig(filename='test.log', filemode='w', level=logging.DEBUG)
 devices_config_path = "%s/devices.json" % get_dir_path_of_this_repo()
+logging.info("config path: {}".format(devices_config_path))
 devices_config = load_json_path(devices_config_path)
 devices = devices_config["devices"]["test"]
 
@@ -68,6 +73,11 @@ class TestSmartHueApi:
 
     @pytest.fixture(params=devices)
     def device(self, request):
+        dut = self.setup.get(request.param)
+        version = dut.get_version()
+        if not version:
+            pytest.skip("skipping test: device %s is not up" % dut.hostname)
+
         return self.setup.get(request.param)
 
     def test_ota(self, device):

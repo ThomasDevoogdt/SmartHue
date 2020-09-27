@@ -9,6 +9,8 @@
 .vscode/**/*.bin
 .vscode/**/*.ipch
 src/build/version.h
-*.pyc
+__pycache__/
+*.py[cod]
 *pytest_cache
 *.log
+.venv

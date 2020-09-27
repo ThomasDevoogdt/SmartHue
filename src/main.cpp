@@ -6,6 +6,7 @@
 #include <DNSServer.h>
 #include <ESP8266WebServerSecure.h>
 #include <ESP8266WiFi.h>
+#include <ESP8266WiFiAP.h>
 #include <ESP8266mDNS.h>
 #include <FS.h>
 #include <Logger.h>
@@ -15,13 +16,22 @@
 #include <secure/pass.h>
 #include <secure/ssl.h>
 
+
+
 bool setupOTA();
 bool setupWiFi(int timeoutConfigAp = 1000 * 600, int timeoutConnection = 1000 * 120);
-bool reconnectWiFi(bool begin = false, bool force = false);
+bool beginWiFi();
+bool reconnectWiFi(bool force = false);
+
+void setupConfigAp();
+void resetConfigAp();
 
 void setupDnsServer();
 void resetDnsServer();
 void serveDnsServer();
+
+void setupMDNS();
+void serveMDNS();
 
 void setupWebServer();
 void resetWebServer();
@@ -29,28 +39,63 @@ void serveWebServer();
 
 const String deviceId = "SmartHue-" + String(ESP.getChipId(), HEX);
 
+#define LOG_ID deviceId.c_str()
+
+#define WIFI_AP_SSID deviceId.c_str()
+#define WIFI_AP_PASS pass::SOFT_AP_PASS
+#define WIFI_AP_CHANNEL 1
+#define WIFI_AP_HIDDEN false
+
+#define OTA_HOSTNAME deviceId.c_str()
+#define OTA_PASS pass::OTA_AP_PASS
+
+#define MDNS_ID deviceId.c_str()
+
+#define WWW_USER pass::WWW_USER
+#define WWW_PASS pass::WWW_PASS
+
+#define LOCAL_IP IPAddress(10, 0, 1, 1)
+#define GATEWAY_IP IPAddress(10, 0, 1, 1)
+#define SUBNET_IP IPAddress(255, 255, 255, 0)
+
 unsigned long loopLastTime = micros();
 float loopFrequency = 0;
 
-Config config;
-Logger logger(deviceId);
-Ticker ticker;
+class GlobalVar {
+public:
+    GlobalVar() :
+        logger(LOG_ID),
+        config(&logger),
+        bootTimeStorage("/tmp/boot.json", &logger),
+        otaLogStorage("/tmp/ota.json", &logger) {}
 
-std::unique_ptr<DNSServer> dnsServer;
-std::unique_ptr<BearSSL::ESP8266WebServerSecure> server;
+    Logger logger;
+    Config config;
+    Ticker ticker;
 
-WiFiUDP syslogUdpClient;
-std::unique_ptr<Syslog> syslog;
+    std::unique_ptr<DNSServer> dnsServer;
+    std::unique_ptr<BearSSL::ESP8266WebServerSecure> server;
 
-LinkedList<void (*)()> loopList;
+    WiFiUDP syslogUdpClient;
+    std::unique_ptr<Syslog> syslog;
 
-Storage bootTimeStorage("tmp/boot.json");
-Storage otaLogStorage("tmp/ota.json");
+    LinkedList<void (*)()> loopList;
+
+    Storage bootTimeStorage;
+    Storage otaLogStorage;
+} *p_var;
 
 // relay board pins
 const uint8_t pins_arr[2] = { D6, D7 };
 
 bool tryWiFiReconnect = false;
+
+String macToString(const uint8 *mac) {
+  char buf[20];
+  snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(buf);
+}
 
 /**
  * Toggle blink led
@@ -66,6 +111,7 @@ void tick()
 void callLoopList(unsigned long delay = 0)
 {
     doWhileLoopDelay(delay, []() {
+        auto &loopList = p_var->loopList;
         // execute all registered loop callbacks
         for (int i = 0; i < loopList.size(); i++) {
             (loopList.get(i))();
@@ -82,6 +128,7 @@ void callLoopList(unsigned long delay = 0)
 
 void setLoopListCb(void (*cb)())
 {
+    auto &loopList = p_var->loopList;
     for (int i = 0; i < loopList.size(); i++) {
         if (loopList.get(i) == cb) {
             return;
@@ -92,6 +139,7 @@ void setLoopListCb(void (*cb)())
 
 void removeLoopListCb(void (*cb)())
 {
+    auto &loopList = p_var->loopList;
     for (int i = 0; i < loopList.size(); i++) {
         if (loopList.get(i) == cb) {
             loopList.remove(i);
@@ -102,11 +150,13 @@ void removeLoopListCb(void (*cb)())
 
 void clearLoopListCb()
 {
+    auto &loopList = p_var->loopList;
     loopList.clear();
 }
 
 bool setPin(JsonObject& jsonRoot)
 {
+    auto &logger = p_var->logger;
     if (!jsonRoot.success()) {
         logger.log("[SetPin] parseObject() failed", Logger::ERROR);
         return false;
@@ -153,6 +203,7 @@ bool setPin(JsonObject& jsonRoot)
 
 bool getPin(JsonObject& jsonRoot)
 {
+    auto &logger = p_var->logger;
     if (!jsonRoot.success()) {
         logger.log("[GetPin] parseObject() failed", Logger::ERROR);
         return false;
@@ -183,6 +234,7 @@ bool getPin(JsonObject& jsonRoot)
 
 void showSystemInfo()
 {
+    auto &logger = p_var->logger;
     logger.log("[sysinfo] system build date: " + String(__DATE__));
     logger.log("[sysinfo] system build time: " + String(__TIME__));
     logger.log("[sysinfo] system version: " + String(version::VERSION_STRING));
@@ -191,6 +243,8 @@ void showSystemInfo()
 
 void showConfig()
 {
+    auto &logger = p_var->logger;
+    auto &config = p_var->config;
     logger.log("[config] load config");
     logger.log("[config] version: " + config.getConfigVersion());
 
@@ -212,15 +266,19 @@ void showConfig()
 
 void setupDnsServer()
 {
+    auto &logger = p_var->logger;
+    auto &dnsServer = p_var->dnsServer;
     logger.log("[Setup DNS server]");
     dnsServer.reset(new DNSServer());
     dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
-    dnsServer->start(53, "*", IPAddress(10, 0, 1, 1));
+    dnsServer->start(53, "*", LOCAL_IP);
     setLoopListCb(serveDnsServer);
 }
 
 void resetDnsServer()
 {
+    auto &logger = p_var->logger;
+    auto &dnsServer = p_var->dnsServer;
     logger.log("[Reset DNS server]");
     dnsServer.reset();
     removeLoopListCb(serveDnsServer);
@@ -228,16 +286,31 @@ void resetDnsServer()
 
 void serveDnsServer()
 {
+    auto &dnsServer = p_var->dnsServer;
     dnsServer->processNextRequest();
 }
 
 void setupWebServer()
 {
+    auto &logger = p_var->logger;
+    auto &server = p_var->server;
     logger.log("[Setup Webserver]");
     server.reset(new BearSSL::ESP8266WebServerSecure(443));
-    server->getServer().setRSACert(new BearSSL::X509List(ssl::serverCert), new BearSSL::PrivateKey(ssl::serverKey));
+    // server->getServer().setRSACert(new BearSSL::X509List(ssl::serverCert), new BearSSL::PrivateKey(ssl::serverKey));
+    server->getServer().setECCert(new BearSSL::X509List(ssl::serverCert), BR_KEYTYPE_EC, new BearSSL::PrivateKey(ssl::serverKey));
+
+    server->on("/", HTTP_GET, []() {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        logger.log("[Webserver] serve /");
+        String response = "Welcome to " + deviceId + ", please have a look at https://github.com/ThomasDevoogdt/SmartHue for more information.";
+        server->send(200, "application/json", response);
+    });
 
     server->on("/api/version", HTTP_GET, []() {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &config = p_var->config;
         logger.log("[Webserver] serve /api/version");
         DynamicJsonBuffer jsonBuffer;
         JsonObject& rootObject = jsonBuffer.createObject();
@@ -262,7 +335,9 @@ void setupWebServer()
     });
 
     server->on("/api/reboot", HTTP_GET, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/reboot");
@@ -274,6 +349,9 @@ void setupWebServer()
     });
 
     server->on("/api/systeminfo", HTTP_GET, []() {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &bootTimeStorage = p_var->bootTimeStorage;
         logger.log("[Webserver] serve /api/systeminfo");
         DynamicJsonBuffer jsonBuffer;
         int bootCount = bootTimeStorage.loadJson(jsonBuffer)["bootcount"];
@@ -316,7 +394,11 @@ void setupWebServer()
     });
 
     server->on("/api/config/reset", HTTP_GET, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &config = p_var->config;
+        auto &bootTimeStorage = p_var->bootTimeStorage;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/config/reset");
@@ -326,13 +408,15 @@ void setupWebServer()
         WiFi.disconnect(true);
         resetDnsServer();
         resetWebServer();
-        bootTimeStorage.remove();
+        bootTimeStorage.reset();
         showConfig();
         ESP.reset();
     });
 
     server->on("/api/config/reload", HTTP_GET, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/config/reload");
@@ -341,7 +425,10 @@ void setupWebServer()
     });
 
     server->on("/api/config", HTTP_POST, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &config = p_var->config;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/config");
@@ -378,7 +465,10 @@ void setupWebServer()
     });
 
     server->on("/api/config", HTTP_GET, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &config = p_var->config;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/config");
@@ -410,7 +500,9 @@ void setupWebServer()
     });
 
     server->on("/api/set", HTTP_POST, []() {
-        if (!server->authenticate(pass::WWW_USER, pass::WWW_PASS)) {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        if (!server->authenticate(WWW_USER, WWW_PASS)) {
             return server->requestAuthentication();
         }
         logger.log("[Webserver] serve /api/set");
@@ -425,6 +517,8 @@ void setupWebServer()
     });
 
     server->on("/api/get", HTTP_GET, []() {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
         logger.log("[Webserver] serve /api/get");
         DynamicJsonBuffer jsonBuffer;
         // JsonObject& rootObject = jsonBuffer.parseObject(server->arg("plain"));
@@ -441,10 +535,13 @@ void setupWebServer()
     });
 
     server->on("/api/ota", HTTP_GET, []() {
+        auto &logger = p_var->logger;
+        auto &server = p_var->server;
+        auto &otaLogStorage = p_var->otaLogStorage;
         logger.log("[Webserver] serve /api/ota");
         DynamicJsonBuffer jsonBuffer;
         JsonObject& rootObject = otaLogStorage.loadJson(jsonBuffer);
-        otaLogStorage.remove();
+        otaLogStorage.reset();
         String response;
         rootObject.prettyPrintTo(response);
         server->send(200, "application/json", response);
@@ -456,6 +553,8 @@ void setupWebServer()
 
 void resetWebServer()
 {
+    auto &logger = p_var->logger;
+    auto &server = p_var->server;
     logger.log("[Reset Webserver]");
     server.reset();
     removeLoopListCb(serveWebServer);
@@ -463,33 +562,37 @@ void resetWebServer()
 
 void serveWebServer()
 {
+    auto &server = p_var->server;
     server->handleClient();
     server->client().flush();
 }
 
 void setupConfigAp()
 {
-    logger.log("[Setup config AP]");
+    auto &logger = p_var->logger;
+    logger.log(F("[Setup config AP]"));
     delay(100);
-    if (!WiFi.isConnected()) {
-        WiFi.persistent(false);
-        WiFi.disconnect();
-        WiFi.mode(WIFI_AP);
-        WiFi.persistent(true);
-    } else {
-        WiFi.mode(WIFI_AP_STA);
-    }
+    WiFi.persistent(false);
+    WiFi.disconnect();
+    WiFi.softAPdisconnect();
+    WiFi.mode(WIFI_AP);
 
-    logger.log("[Setup config AP] configuring access point... ");
-    WiFi.softAPConfig(
-        IPAddress(10, 0, 1, 1), // local ip
-        IPAddress(10, 0, 1, 1), // gateway
-        IPAddress(255, 255, 255, 0)); // subnet
-
-    WiFi.softAP(
-        deviceId.c_str(), // ssid
-        pass::SOFT_AP_PASS, // pass
-        1, false); // channel = 1, hidden = false
+    logger.log(F("[Setup config AP] configuring access point... "));
+    WiFi.softAPConfig(LOCAL_IP, GATEWAY_IP, SUBNET_IP); 
+    WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASS, WIFI_AP_CHANNEL, WIFI_AP_HIDDEN);
+    WiFi.onSoftAPModeProbeRequestReceived([](const WiFiEventSoftAPModeProbeRequestReceived &dst) {
+        auto &logger = p_var->logger;
+        logger.log("[Connect config AP] mac = " + macToString(dst.mac) + ", rssi = " + dst.rssi + ": probe request received");
+    });
+    WiFi.onSoftAPModeStationConnected([](const WiFiEventSoftAPModeStationConnected &dst) {
+        auto &logger = p_var->logger;
+        logger.log("[Connect config AP] mac = " + macToString(dst.mac) + ", aid = " + dst.aid + ": station connected");
+    });
+    WiFi.onSoftAPModeStationDisconnected([](const WiFiEventSoftAPModeStationDisconnected &dst) {
+        auto &logger = p_var->logger;
+        logger.log("[Connect config AP] mac = " + macToString(dst.mac) + ", aid = " + dst.aid + ": station disconnected");
+    });
+    WiFi.begin();
 
     delay(500);
     logger.log("[Config config AP] IP address: " + WiFi.softAPIP().toString());
@@ -497,27 +600,46 @@ void setupConfigAp()
 
 void resetConfigAp()
 {
-    logger.log("[Reset config AP] reset config AP");
+    auto &logger = p_var->logger;
+    logger.log(F("[Reset config AP] reset config AP"));
     WiFi.disconnect();
+    WiFi.softAPdisconnect();
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(true);
 }
 
-bool reconnectWiFi(bool begin, bool force)
+bool beginWiFi() 
 {
-    logger.log("[WiFi] attempting WiFi connection...", Logger::DEBUG);
+    auto &logger = p_var->logger;
+    auto &config = p_var->config;
+    logger.log(F("[WiFi] begin WiFi connection..."), Logger::DEBUG);
 
-    if (begin) {
-        String ssid, pass;
-        config.getWifiConfig(ssid, pass);
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(ssid.c_str(), pass.c_str());
+    String ssid, pass;
+    config.getWifiConfig(ssid, pass);
+    if (ssid.isEmpty()) {
+        logger.log(F("[WiFi] no SSID configured yet, skipping connection"), Logger::WARN);
+        return false;
     }
 
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    return true;
+}
+
+bool reconnectWiFi(bool force)
+{
+    auto &logger = p_var->logger;
+    if (WiFi.isConnected()) {
+        logger.log("[WIFI] connected, IP address: " + WiFi.localIP().toString());
+        return true;
+    } 
+
+    logger.log(F("[WiFi] attempting WiFi connection..."), Logger::DEBUG);
     if (force) {
         WiFi.reconnect();
     }
 
-    if (WiFi.isConnected()) {
+    if (doWhileLoopDelay(10000, []() { return WiFi.isConnected(); })) {
         logger.log("[WIFI] connected, IP address: " + WiFi.localIP().toString());
         return true;
     } else {
@@ -527,30 +649,31 @@ bool reconnectWiFi(bool begin, bool force)
 
 bool setupWiFi(int timeoutConfigAp, int timeoutConnection)
 {
+    auto &logger = p_var->logger;
     bool (*tryToConnect)(unsigned long) = [](unsigned long timeout) {
-        reconnectWiFi(true); // begin WiFi
-        return doWhileLoopDelay(timeout, []() {
-            delay(500);
+        if(!beginWiFi()){
+            return false;
+        }
+        return doWhileLoopDelay(timeout / 2, []() {
             return reconnectWiFi(false);
         });
     };
 
-    logger.log("[Wifi Setup]");
+    logger.log(F("[Wifi Setup]"));
     if (tryToConnect(timeoutConnection)) {
-        logger.log("[Wifi Setup] direct connection, return");
+        logger.log(F("[Wifi Setup] direct connection, return"));
         return true;
     }
 
     setupConfigAp();
     setupDnsServer();
 
-    doWhileLoopDelay(timeoutConfigAp, []() {
+    do {
         callLoopList();
-        return tryWiFiReconnect;
-    });
+    } while (!tryWiFiReconnect);
     tryWiFiReconnect = false;
 
-    logger.log("[Wifi Setup] try wifi reconnect");
+    logger.log(F("[Wifi Setup] try wifi reconnect"));
     callLoopList();
     resetConfigAp();
     resetDnsServer();
@@ -559,30 +682,41 @@ bool setupWiFi(int timeoutConfigAp, int timeoutConnection)
 
 bool setupSyslog()
 {
-    logger.log("[Syslog Setup]");
+    auto &logger = p_var->logger;
+    auto &config = p_var->config;
+    auto &syslog = p_var->syslog;
+    auto &syslogUdpClient = p_var->syslogUdpClient;
+    logger.log(F("[Syslog Setup]"));
     String syslog_server;
     int syslog_port;
     config.getSyslogConfig(syslog_server, syslog_port);
     IPAddress ipAddress;
     ipAddress.fromString(syslog_server);
-    syslog.reset(new Syslog(syslogUdpClient, ipAddress, syslog_port, deviceId.c_str()));
+    syslog.reset(new Syslog(syslogUdpClient, ipAddress, syslog_port, LOG_ID));
     return true;
 }
 
 bool setupOTA()
 {
-    ArduinoOTA.setHostname(deviceId.c_str());
-    ArduinoOTA.setPassword(pass::OTA_AP_PASS);
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setPassword(OTA_PASS);
     ArduinoOTA.begin();
     ArduinoOTA.onStart([]() {
+        auto &logger = p_var->logger;
+        auto &ticker = p_var->ticker;
+        auto &otaLogStorage = p_var->otaLogStorage;
         ticker.attach(0.2, tick);
-        logger.log("[OTA] start");
-        otaLogStorage.remove();
+        logger.log("[OTA] start: " + String(ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem"));
+        otaLogStorage.reset();
     });
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        auto &logger = p_var->logger;
         logger.log("[OTA] progress: " + String(progress / (total / 100)));
     });
     ArduinoOTA.onEnd([]() {
+        auto &logger = p_var->logger;
+        auto &ticker = p_var->ticker;
+        auto &otaLogStorage = p_var->otaLogStorage;
         ticker.detach();
         logger.log("[OTA] end");
 
@@ -592,29 +726,31 @@ bool setupOTA()
         otaLogStorage.writeJson(rootObject);
     });
     ArduinoOTA.onError([](ota_error_t error) {
+        auto &logger = p_var->logger;
+        auto &otaLogStorage = p_var->otaLogStorage;
         logger.log("[OTA] error (code: " + String(error) + ")", Logger::ERROR);
         DynamicJsonBuffer jsonBuffer;
         JsonObject& rootObject = jsonBuffer.createObject();
         switch (error) {
         case OTA_AUTH_ERROR:
-            logger.log("[OTA] Auth Failed", Logger::ERROR);
-            rootObject.set("ota", "Auth Failed");
+            logger.log(F("[OTA] Auth Failed"), Logger::ERROR);
+            rootObject.set(F("ota"), F("Auth Failed"));
             break;
         case OTA_BEGIN_ERROR:
-            logger.log("[OTA] Begin Failed", Logger::ERROR);
-            rootObject.set("ota", "Begin Failed");
+            logger.log(F("[OTA] Begin Failed"), Logger::ERROR);
+            rootObject.set(F("ota"), F("Begin Failed"));
             break;
         case OTA_CONNECT_ERROR:
-            logger.log("[OTA] Connect Failed", Logger::ERROR);
-            rootObject.set("ota", "Connect Failed");
+            logger.log(F("[OTA] Connect Failed"), Logger::ERROR);
+            rootObject.set(F("ota"), F("Connect Failed"));
             break;
         case OTA_RECEIVE_ERROR:
-            logger.log("[OTA] Receive Failed", Logger::ERROR);
-            rootObject.set("ota", "Receive Failed");
+            logger.log(F("[OTA] Receive Failed"), Logger::ERROR);
+            rootObject.set(F("ota"), F("Receive Failed"));
             break;
         case OTA_END_ERROR:
-            logger.log("[OTA] End Failed", Logger::ERROR);
-            rootObject.set("ota", "End Failed");
+            logger.log(F("[OTA] End Failed"), Logger::ERROR);
+            rootObject.set(F("ota"), F("End Failed"));
             break;
         }
         otaLogStorage.writeJson(rootObject);
@@ -625,12 +761,27 @@ bool setupOTA()
     return true;
 }
 
-bool setupMDNS()
+void setupMDNS()
 {
-    MDNS.begin(deviceId.c_str());
+    auto &logger = p_var->logger;
+    String id = MDNS_ID;
+    id.toLowerCase();
+    logger.log("[mDNS] setup local dns: https://" + id + ".local/");
+    MDNS.begin(id);
     MDNS.addService("http", "tcp", 80); // ota
     MDNS.addService("https", "tcp", 443);
-    return true;
+    setLoopListCb(serveMDNS);
+}
+
+void serveMDNS()
+{
+    if(!MDNS.isRunning()) {
+        String id = MDNS_ID;
+        id.toLowerCase();
+        MDNS.begin(id);
+        MDNS.announce();
+    }
+    MDNS.update();
 }
 
 void setup()
@@ -638,21 +789,24 @@ void setup()
     // first things first ...
     // forces a closed relay,
     // this guarantees an equal working when a user turns the light on
+    p_var = new GlobalVar();
+    auto &logger = p_var->logger;
     logger.log("[setup] initialize and close the relays");
     pinMode(pins_arr, OUTPUT);
     digitalWrite(pins_arr, HIGH);
-
-    // update boot count
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& jsonObjectRoot = bootTimeStorage.loadJson(jsonBuffer);
-    jsonObjectRoot.set("bootcount", 1 + (jsonObjectRoot["bootcount"] | 0));
-    bootTimeStorage.writeJson(jsonObjectRoot);
 
     // start serial session
     Serial.begin(115200);
     Serial.println();
 
+    // update boot count
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& jsonObjectRoot = p_var->bootTimeStorage.loadJson(jsonBuffer);
+    jsonObjectRoot.set("bootcount", 1 + (jsonObjectRoot["bootcount"] | 0));
+    p_var->bootTimeStorage.writeJson(jsonObjectRoot);
+
     // register loggers
+    logger.resetDefaultLogger();
     logger.registerLogger(
         [](const String& message) {
             Serial.println(message);
@@ -661,8 +815,8 @@ void setup()
     logger.log("[setup] serial log registered");
     logger.registerLogger(
         [](const String& message) {
-            if (syslog) {
-                syslog->log(LOG_INFO, message);
+            if (p_var->syslog) {
+                p_var->syslog->log(LOG_INFO, message);
             }
         },
         Logger::DEBUG);
@@ -676,9 +830,11 @@ void setup()
     // create a setup phase identification
     logger.log("[setup] attach builtin led ticker");
     pinMode(LED_BUILTIN, OUTPUT);
-    ticker.attach(0.6, tick);
+    p_var->ticker.attach(0.6, tick);
 
     showConfig();
+    showSystemInfo();
+
     setupMDNS();
     setupWebServer();
     setupOTA();
@@ -696,17 +852,19 @@ void setup()
     setupSyslog();
 
     // keep LED on
-    ticker.detach();
+    p_var->ticker.detach();
     digitalWrite(LED_BUILTIN, LOW);
 
     setLoopListCb([]() {
         // keep WiFi active
         if (!WiFi.isConnected()) {
-            reconnectWiFi();
+            reconnectWiFi(true);
         }
     });
 
-    showSystemInfo();
+    showSystemInfo(); // show it again because we're now connected to Syslog
+    setupMDNS(); // do this setup again to ensure a properly working system
+
     logger.log("[setup] Setup done! Entering loop mode ...");
 }
 
