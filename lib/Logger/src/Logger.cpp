@@ -4,11 +4,19 @@
 Logger::Logger()
     : m_hostname("")
 {
+    // register default logger
+    registerLogger([](const String& message) {
+            Serial.println(message);
+    }, Logger::DEBUG);
 }
 
 Logger::Logger(const String& hostname)
     : m_hostname(hostname)
 {
+    // register default logger
+    registerLogger([](const String& message) {
+            Serial.println(message);
+    }, Logger::DEBUG);
 }
 
 void Logger::registerLogger(void (*logger)(const String&), Severity severity)

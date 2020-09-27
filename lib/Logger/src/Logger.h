@@ -1,10 +1,11 @@
 #ifndef LOGGER_h
 #define LOGGER_h
 
+#include <Print.h>
 #include <Arduino.h>
 #include <LinkedList.h>
 
-class Logger {
+class Logger : public Print {
 public:
     enum class Severity {
         ERROR,
@@ -23,6 +24,7 @@ public:
     Logger(const String& hostName);
 
     void registerLogger(void (*logger)(const String&), Severity severity = Logger::INFO);
+    void resetDefaultLogger() { m_loggerNodeList.clear(); }
 
     template <typename Printable>
     void log(const Printable message, const Severity severity = Logger::INFO)
@@ -37,6 +39,16 @@ public:
         pushLogToNodes(logMessage, severity);
     }
 
+    size_t write(uint8_t buffer) override {
+        if (buffer == '\n') {
+            log(m_writer);
+            m_writer = "";
+            return 0;
+        }
+        m_writer += (char)buffer;
+        return 1;
+    }
+
 private:
     void getLogTime(String& msg);
     void getLogSeverity(String& msg, const Severity& severity);
@@ -49,6 +61,7 @@ private:
 
     LinkedList<LoggerNode> m_loggerNodeList;
     String m_hostname;
+    String m_writer;
 };
 
 #endif
