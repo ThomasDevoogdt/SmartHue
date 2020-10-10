@@ -33,7 +33,7 @@ def pio_run_upload(device):
             "--environment esp-12F-ota",
             "--upload-port %s.local" % device.hostname.lower()
         ]
-        run_subprocess("platformio run %s" % ' '.join(flags), cwd='../../')
+        run_subprocess("platformio run %s" % ' '.join(flags))
     except subprocess.CalledProcessError:
         pass  # platformio sometimes returns error code 1 while the upload is actually succeeded
 
