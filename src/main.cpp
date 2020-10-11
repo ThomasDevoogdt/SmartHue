@@ -359,6 +359,8 @@ void setupWebServer()
         server->client().flush();
         resetDnsServer();
         resetWebServer();
+        digitalWrite(pins_arr, LOW); // prevent to fast flicker by early power-off
+        delay(2000);
         ESP.restart();
     });
 
@@ -738,6 +740,9 @@ bool setupOTA()
         JsonObject& rootObject = jsonBuffer.createObject();
         rootObject.set("ota", "success");
         otaLogStorage.writeJson(rootObject);
+
+        digitalWrite(pins_arr, LOW); // prevent to fast flicker by early power-off
+        delay(2000);
     });
     ArduinoOTA.onError([](ota_error_t error) {
         auto &logger = p_var->logger;
