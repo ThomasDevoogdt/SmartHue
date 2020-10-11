@@ -38,6 +38,7 @@ void resetWebServer();
 void serveWebServer();
 
 const String deviceId = "SmartHue-" + String(ESP.getChipId(), HEX);
+const String repoUrl = "https://github.com/ThomasDevoogdt/SmartHue";
 
 #define LOG_ID deviceId.c_str()
 
@@ -303,8 +304,21 @@ void setupWebServer()
         auto &logger = p_var->logger;
         auto &server = p_var->server;
         logger.log("[Webserver] serve /");
-        String response = "Welcome to " + deviceId + ", please have a look at https://github.com/ThomasDevoogdt/SmartHue for more information.";
-        server->send(200, "application/json", response);
+        String response =
+            "<!DOCTYPE html>"
+            "<html>"
+            "<body>"
+            "<h1>" + deviceId + "</h1>"
+            "<p>Welcome to " + deviceId + ", please have a look at <a href=\"" + repoUrl + "\">" + repoUrl + "</a> for more information.</p>"
+            "<h2>GET</h2>"
+            "<ul>"
+            "<li><a href=\"https://" + deviceId + ".local/api/version\">/api/version</a></li>"
+            "<li><a href=\"https://" + deviceId + ".local/api/systeminfo\">/api/systeminfo</a></li>"
+            "<li><a href=\"https://" + deviceId + ".local/api/config\">/api/config</a></li>"
+            "</ul>"
+            "</body>"
+            "</html>";
+        server->send(200, "text/html", response);
     });
 
     server->on("/api/version", HTTP_GET, []() {
