@@ -637,9 +637,14 @@ bool beginWiFi()
         return false;
     }
 
+    logger.log(F("[WiFi] SSID found, begin connection attempt"), Logger::DEBUG);
+    WiFi.persistent(false); // 2.2.0 Exception (3): #1997
+    WiFi.disconnect(true);
+    // Begin wifi after disconnecting, to solve a weird bug reported at
+    // https://github.com/esp8266/Arduino/issues/1997#issuecomment-436673828
     WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    return true;
+    WiFi.begin(ssid, pass);
+    return true; 
 }
 
 bool reconnectWiFi(bool force)
@@ -808,15 +813,31 @@ void setup()
     // first things first ...
     // forces a closed relay,
     // this guarantees an equal working when a user turns the light on
-    p_var = new GlobalVar();
-    auto &logger = p_var->logger;
-    logger.log("[setup] initialize and close the relays");
     pinMode(pins_arr, OUTPUT);
     digitalWrite(pins_arr, HIGH);
 
     // start serial session
     Serial.begin(115200);
-    Serial.println();
+    Serial.println("[setup] setup workspace");
+    p_var = new GlobalVar();
+    auto &logger = p_var->logger;
+    logger.log("[setup] initialize and close the relays done!");
+
+    // if a crash occurs, then do not immediately try to restart,
+    // otherwise the releys are flickering all the time
+    rst_info *reset_info = ESP.getResetInfoPtr();
+    switch (reset_info ? reset_info->reason : rst_reason::REASON_DEFAULT_RST) {
+    case rst_reason::REASON_WDT_RST:
+    case rst_reason::REASON_EXCEPTION_RST:
+    case rst_reason::REASON_SOFT_WDT_RST:
+        logger.log("[setup] exceptional reset occurred: " + ESP.getResetReason() + ", I'm going to sleep ... ");
+        while (true) {
+            delay(1000);
+        }
+        break;
+    default:
+        break;
+    }
 
     // update boot count
     DynamicJsonBuffer jsonBuffer;
